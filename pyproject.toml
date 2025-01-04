@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling", "hatch-fancy-pypi-readme"]
-build-backend = "hatchling.build"
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "enviroplus"
@@ -143,3 +143,24 @@ commands = [
 	"sudo raspi-config nonint do_serial_cons 1",
 	"sudo raspi-config nonint do_serial_hw 0"
 ]
+
+[tool.poetry]
+name = "your-project-name"
+version = "0.1.0"
+description = "Your project description"
+authors = ["Your Name <you@example.com>"]
+
+[tool.poetry.dependencies]
+python = "^3.7"
+# Add your main dependencies here
+
+[tool.poetry.dev-dependencies]
+check-manifest = "^0.47"
+ruff = "^0.0.0"
+codespell = "^2.0.0"
+isort = "^5.0.0"
+twine = "^3.0.0"
+hatch = "^1.0.0"
+hatch-fancy-pypi-readme = "^0.0.0"
+tox = "^4.0.0"
+pdoc = "^0.0.0"
