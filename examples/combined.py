@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+combined.py - Displays readings from all of Enviro plus' sensors
+
+Press Ctrl+C to exit!
+"""
 
 import colorsys
 import sys
 import time
+import logging
+from subprocess import PIPE, Popen
 
 import st7735
 
@@ -13,9 +21,6 @@ try:
 except ImportError:
     import ltr559
 
-import logging
-from subprocess import PIPE, Popen
-
 from bme280 import BME280
 from fonts.ttf import RobotoMedium as UserFont
 from PIL import Image, ImageDraw, ImageFont
@@ -25,16 +30,14 @@ from pms5003 import SerialTimeoutError
 
 from enviroplus import gas
 
+
 logging.basicConfig(
     format="%(asctime)s.%(msecs)03d %(levelname)-8s %(message)s",
     level=logging.INFO,
-    datefmt="%Y-%m-%d %H:%M:%S")
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
 
-logging.info("""combined.py - Displays readings from all of Enviro plus' sensors
-
-Press Ctrl+C to exit!
-
-""")
+logging.info(__doc__)
 
 # BME280 temperature/pressure/humidity sensor
 bme280 = BME280()
@@ -103,15 +106,18 @@ units = [
 ]
 
 # Define your own warning limits
-# The limits definition follows the order of the variables array
-# For example, temperature has [4, 18, 28, 35]. These are thresholds for 
-# dangerously low, low, normal, high, and dangerously high, respectively.
-# Disclaimer: Adjust these limits to fit your requirements.
+# The limits definition follows the order of the variables array.
+# For example, temperature has [4, 18, 28, 35], meaning:
+#  <= 4        => Dangerously Low
+#  >4  to <=18 => Low
+#  >18 to <=28 => Normal
+#  >28 to <=35 => High
+#  >35         => Dangerously High
 limits = [
     [4, 18, 28, 35],        # temperature
-    [250, 650, 1013.25, 1015],   # pressure
+    [250, 650, 1013.25, 1015],  # pressure
     [20, 30, 60, 70],       # humidity
-    [-1, -1, 30000, 100000], # light
+    [-1, -1, 30000, 100000],  # light
     [-1, -1, 40, 50],       # oxidised
     [-1, -1, 450, 550],     # reduced
     [-1, -1, 200, 300],     # nh3
@@ -132,6 +138,20 @@ palette = [
 values = {}
 
 
+def get_cpu_temperature():
+    """
+    Reads the CPU temperature from /sys/class/thermal/thermal_zone0/temp.
+    Falls back to a default if not available.
+    """
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+            temp_str = f.read().strip()
+        return float(temp_str) / 1000.0
+    except (FileNotFoundError, ValueError):
+        logging.warning("Could not read /sys/class/thermal/thermal_zone0/temp")
+        return 20.0  # a safe fallback
+
+
 def display_text(variable, data, unit):
     """
     Displays data and text on the 0.96" LCD for a single variable.
@@ -143,27 +163,32 @@ def display_text(variable, data, unit):
     # Scale the values for the variable between 0 and 1
     vmin = min(values[variable])
     vmax = max(values[variable])
-    colours = [(v - vmin + 1) / (vmax - vmin + 1) for v in values[variable]]
+    # Avoid division by zero if all values are the same
+    spread = (vmax - vmin) + 1
+    colours = [(v - vmin + 1) / spread for v in values[variable]]
 
     # Format the variable name and value
-    message = f"{variable[:4]}: {data:.1f} {unit}"
-    logging.info(message)
+    msg = f"{variable[:4]}: {data:.1f} {unit}"
+    logging.info(msg)
 
     # Clear the screen to white
     draw.rectangle((0, 0, WIDTH, HEIGHT), (255, 255, 255))
 
-    for i in range(len(colours)):
+    for i, c in enumerate(colours):
         # Convert the values to colours from red (1.0) to blue (0.0)
-        colour = (1.0 - colours[i]) * 0.6
-        r, g, b = [int(x * 255.0) for x in colorsys.hsv_to_rgb(colour, 1.0, 1.0)]
+        colour_scale = (1.0 - c) * 0.6
+        r, g, b = [int(x * 255.0)
+                   for x in colorsys.hsv_to_rgb(colour_scale, 1.0, 1.0)]
+
         # Draw a 1-pixel wide rectangle of colour
         draw.rectangle((i, top_pos, i + 1, HEIGHT), (r, g, b))
+
         # Draw a line graph in black
-        line_y = HEIGHT - (top_pos + (colours[i] * (HEIGHT - top_pos))) + top_pos
+        line_y = HEIGHT - (top_pos + (c * (HEIGHT - top_pos))) + top_pos
         draw.rectangle((i, line_y, i + 1, line_y + 1), (0, 0, 0))
 
     # Write the text at the top in black
-    draw.text((0, 0), message, font=font, fill=(0, 0, 0))
+    draw.text((0, 0), msg, font=font, fill=(0, 0, 0))
     st7735.display(img)
 
 
@@ -175,8 +200,8 @@ def save_data(idx, data):
     variable = variables[idx]
     values[variable] = values[variable][1:] + [data]
     unit = units[idx]
-    message = f"{variable[:4]}: {data:.1f} {unit}"
-    logging.info(message)
+    msg = f"{variable[:4]}: {data:.1f} {unit}"
+    logging.info(msg)
 
 
 def display_everything():
@@ -186,16 +211,19 @@ def display_everything():
     """
     draw.rectangle((0, 0, WIDTH, HEIGHT), (0, 0, 0))
     column_count = 2
-    row_count = (len(variables) / column_count)
+    row_count = len(variables) / column_count
 
-    for i in range(len(variables)):
-        variable = variables[i]
+    for i, variable in enumerate(variables):
         data_value = values[variable][-1]
         unit = units[i]
 
-        x = x_offset + ((WIDTH // column_count) * (i // row_count))
-        y = y_offset + int((HEIGHT / row_count) * (i % row_count))
-        message = f"{variable[:4]}: {data_value:.1f} {unit}"
+        # Calculate the row & column
+        col_index = i // int(row_count)
+        row_index = i % int(row_count)
+
+        x = x_offset + ((WIDTH // column_count) * col_index)
+        y = y_offset + int((HEIGHT / row_count) * row_index)
+        msg = f"{variable[:4]}: {data_value:.1f} {unit}"
 
         # Determine the color of the text using the user-defined limits
         lim = limits[i]
@@ -204,24 +232,18 @@ def display_everything():
             if data_value > limit:
                 rgb = palette[j + 1]
 
-        draw.text((x, y), message, font=smallfont, fill=rgb)
+        draw.text((x, y), msg, font=smallfont, fill=rgb)
 
     st7735.display(img)
 
 
-def get_cpu_temperature():
-    """
-    Reads the CPU temperature from vcgencmd. Used to compensate for internal
-    heating that can skew the BME280 temperature reading.
-    """
-    process = Popen(["vcgencmd", "measure_temp"], stdout=PIPE, universal_newlines=True)
-    output, _error = process.communicate()
-    return float(output[output.index("=") + 1 : output.rindex("'")])
-
-
 def main():
-    # Tuning factor for compensation. Decrease this number to adjust the
-    # temperature down, and increase to adjust up
+    """
+    Main loop: cycles through single-variable modes (0–9) and a combined mode (10)
+    that shows everything on one screen. Tap near the sensor to change modes.
+    """
+    # Tuning factor for compensation. Decrease to adjust temperature down,
+    # increase to adjust up
     factor = 2.25
 
     cpu_temps = [get_cpu_temperature()] * 5
@@ -231,8 +253,8 @@ def main():
     last_page = 0
 
     # Initialize the values dictionary
-    for v in variables:
-        values[v] = [1] * WIDTH
+    for var in variables:
+        values[var] = [1] * WIDTH
 
     try:
         while True:
@@ -243,57 +265,57 @@ def main():
                 mode = (mode + 1) % (len(variables) + 1)
                 last_page = time.time()
 
-            # One mode for each variable
             if mode == 0:
-                # variable = "temperature"
+                # Temperature
                 unit = "°C"
                 cpu_temp = get_cpu_temperature()
-                cpu_temps = cpu_temps[1:] + [cpu_temp]  # rolling list
+                cpu_temps = cpu_temps[1:] + [cpu_temp]
                 avg_cpu_temp = sum(cpu_temps) / float(len(cpu_temps))
                 raw_temp = bme280.get_temperature()
                 data = raw_temp - ((avg_cpu_temp - raw_temp) / factor)
                 display_text(variables[mode], data, unit)
 
             elif mode == 1:
-                # variable = "pressure"
+                # Pressure
                 unit = "hPa"
                 data = bme280.get_pressure()
                 display_text(variables[mode], data, unit)
 
             elif mode == 2:
-                # variable = "humidity"
+                # Humidity
                 unit = "%"
                 data = bme280.get_humidity()
                 display_text(variables[mode], data, unit)
 
             elif mode == 3:
-                # variable = "light"
+                # Light
                 unit = "Lux"
-                # If the proximity is low, read actual lux from LTR559; 
-                # otherwise, treat it as 1 to avoid overflow.
                 data = ltr559.get_lux() if proximity < 10 else 1
                 display_text(variables[mode], data, unit)
 
             elif mode == 4:
-                # variable = "oxidised"
+                # Oxidised
                 unit = "kO"
-                data = gas.read_all().oxidising / 1000
+                gas_data = gas.read_all()
+                data = gas_data.oxidising / 1000
                 display_text(variables[mode], data, unit)
 
             elif mode == 5:
-                # variable = "reduced"
+                # Reduced
                 unit = "kO"
-                data = gas.read_all().reducing / 1000
+                gas_data = gas.read_all()
+                data = gas_data.reducing / 1000
                 display_text(variables[mode], data, unit)
 
             elif mode == 6:
-                # variable = "nh3"
+                # NH3
                 unit = "kO"
-                data = gas.read_all().nh3 / 1000
+                gas_data = gas.read_all()
+                data = gas_data.nh3 / 1000
                 display_text(variables[mode], data, unit)
 
             elif mode == 7:
-                # variable = "pm1"
+                # PM1
                 unit = "ug/m3"
                 try:
                     pms_data = pms5003.read()
@@ -304,7 +326,7 @@ def main():
                 display_text(variables[mode], data, unit)
 
             elif mode == 8:
-                # variable = "pm25"
+                # PM2.5
                 unit = "ug/m3"
                 try:
                     pms_data = pms5003.read()
@@ -315,7 +337,7 @@ def main():
                 display_text(variables[mode], data, unit)
 
             elif mode == 9:
-                # variable = "pm10"
+                # PM10
                 unit = "ug/m3"
                 try:
                     pms_data = pms5003.read()
@@ -325,33 +347,28 @@ def main():
                     data = 0
                 display_text(variables[mode], data, unit)
 
-            elif mode == 10:
-                # Everything on one screen, updating each sensor in sequence
+            else:
+                # Everything on one screen (mode == 10)
                 cpu_temp = get_cpu_temperature()
                 cpu_temps = cpu_temps[1:] + [cpu_temp]
                 avg_cpu_temp = sum(cpu_temps) / float(len(cpu_temps))
                 raw_temp = bme280.get_temperature()
                 adjusted_temp = raw_temp - ((avg_cpu_temp - raw_temp) / factor)
                 save_data(0, adjusted_temp)
-                display_everything()
 
                 raw_data = bme280.get_pressure()
                 save_data(1, raw_data)
-                display_everything()
 
                 raw_data = bme280.get_humidity()
                 save_data(2, raw_data)
-                display_everything()
 
                 lux_data = ltr559.get_lux() if proximity < 10 else 1
                 save_data(3, lux_data)
-                display_everything()
 
                 gas_data = gas.read_all()
                 save_data(4, gas_data.oxidising / 1000)
                 save_data(5, gas_data.reducing / 1000)
                 save_data(6, gas_data.nh3 / 1000)
-                display_everything()
 
                 try:
                     pms_data = pms5003.read()
