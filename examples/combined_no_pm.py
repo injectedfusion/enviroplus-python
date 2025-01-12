@@ -302,6 +302,9 @@ def main():
                 save_data(6, gas_data.nh3 / 1000)
 
                 display_everything()
+            
+            # ADD A SHORT DELAY to slow down refresh rate
+            time.sleep(2.0)    
 
     except KeyboardInterrupt:
         sys.exit(0)
