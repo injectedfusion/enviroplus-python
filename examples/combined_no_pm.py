@@ -304,7 +304,7 @@ def main():
                 display_everything()
             
             # ADD A SHORT DELAY to slow down refresh rate
-            time.sleep(2.0)    
+            time.sleep(5.0)    
 
     except KeyboardInterrupt:
         sys.exit(0)
