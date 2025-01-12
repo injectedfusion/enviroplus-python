@@ -379,6 +379,8 @@ def main():
                     logging.warning("Failed to read PMS5003")
 
                 display_everything()
+            
+            time.sleep(5.0)
 
     except KeyboardInterrupt:
         sys.exit(0)
